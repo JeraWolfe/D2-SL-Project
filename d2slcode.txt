@@ -1,7 +1,5 @@
-D2 Code
-
-D2 Scr Disc
-
+//D2 Code
+//D2 Source Disc
 //Digital Dynamix Disc 5.0
 //Virtually lagless flight that tracks your heading.
 //DO NOT compile this script in Mono, or else it will create simulator lag on rez.
@@ -116,7 +114,7 @@ state blocked
 }
 
 
-D2 Master Control Script
+//D2 Master Control Script
 
 // Update Global Variables, for use with Update Server.
 string current_version = "4.2";
@@ -765,7 +763,7 @@ state derezz
     }    
 }
 
-D2 Holster Comm Script
+//D2 Holster Comm Script
 
 //Pulling config file from HUD
 key d2hudid;
@@ -948,7 +946,7 @@ default
     }
 }
 
-D2 Disc Prop Com Script
+//D2 Disc Prop Com Script
 
 // Global Constants
 key d2hudid;
@@ -1130,7 +1128,7 @@ default
     }
 }
 
-D2 Disc IDD Flight Script
+//D2 Disc IDD Flight Script
 
 // For unpacking 255 for the second byte, and 65280 for the first, going left to right.
 
@@ -1463,8 +1461,7 @@ state blocked
         llDie();
 */
 
-D2 Disc IDD Return Script
-both of this and the flight script are version 4.2.5
+//D2 Disc IDD Return Script both of this and the flight script are version 4.2.5
 
 //Useful constants to define disk life cycle
 integer outbound_life = 50;
