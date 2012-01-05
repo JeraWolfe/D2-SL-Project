@@ -1,0 +1,1700 @@
+D2 Code
+
+D2 Scr Disc
+
+//Digital Dynamix Disc 5.0
+//Virtually lagless flight that tracks your heading.
+//DO NOT compile this script in Mono, or else it will create simulator lag on rez.
+
+integer count = 0;
+key avkey = NULL_KEY;
+
+fly(vector dest)
+{
+    vector direction = dest - llGetPos();
+    if (llVecMag(direction) >= 10.0) direction = llVecNorm(direction)*10.0;
+    vector friction = llGetVel()*0.25;
+    llApplyImpulse((direction-friction)*llGetMass(), FALSE);
+}
+
+RezBumper(vector p)
+{
+    llRezObject("bumper",p,ZERO_VECTOR,ZERO_ROTATION,0);
+}
+
+default
+{
+    state_entry()
+    {
+        llSetStatus(STATUS_ROTATE_X | STATUS_ROTATE_Y | STATUS_ROTATE_Z, FALSE);
+        llSetBuoyancy(1.0);
+    }
+    
+    on_rez(integer a)
+    {
+        state flying;
+    }
+}
+
+state flying
+{
+    state_entry()
+    {
+       avkey = llGetOwner();
+       count = 0;
+       llSetTimerEvent(0.1);
+    }
+    
+    timer()
+    {
+        vector avpos = llList2Vector(llGetObjectDetails(avkey, [OBJECT_POS]), 0);
+        rotation avrot = llList2Rot(llGetObjectDetails(avkey, [OBJECT_ROT]), 0);
+        fly(avpos + llRot2Fwd(avrot)*20);
+        ++count;
+        if (count >= 40) state inbound;
+    }
+    
+    collision_start(integer num_detected)
+    {
+        if(llDetectedType(0) & AGENT) state inbound;
+        if(llDetectedName(0) == "blockshield")
+        {
+            avkey = llDetectedOwner(0);
+            state blocked;
+        }
+    }
+}
+
+state inbound
+{
+    state_entry()
+    {
+        count = 0;
+        llSetTimerEvent(0.1);
+        llVolumeDetect(TRUE);
+    }
+    
+    timer()
+    {
+        fly(llList2Vector(llGetObjectDetails(llGetOwner(), [OBJECT_POS]), 0));
+        ++count;
+        if (count >= 30) llDie();
+    }
+    
+    collision_start(integer num_detected)
+    {
+        if ((llDetectedType(0) & AGENT) && (llDetectedKey(0) != llGetOwner())) RezBumper(llDetectedPos(0));
+        if (llDetectedKey(0) == llGetOwner()) llDie();
+    }
+}
+
+state blocked
+{
+    state_entry()
+    {
+        count = 0;
+        llSetTimerEvent(0.1);
+    }
+    
+    timer()
+    {
+        vector avpos = llList2Vector(llGetObjectDetails(avkey, [OBJECT_POS]), 0);
+        rotation avrot = llList2Rot(llGetObjectDetails(avkey, [OBJECT_ROT]), 0);
+        fly(avpos + llRot2Fwd(avrot)*30);
+        ++count;
+        if (count >= 30) llDie();
+    }
+    
+    collision_start(integer num_detected)
+    {
+        if(llDetectedName(0) == "blockshield")
+        {
+            avkey = llDetectedOwner(0);
+            count = 0;
+        }
+    }
+}
+
+
+D2 Master Control Script
+
+// Update Global Variables, for use with Update Server.
+string current_version = "4.2";
+string update_URL = "http://www.zetaphor.net/d2update/D2UpdateServer.php";
+string object_name = "D2UA 'Norton' Avatar System";
+
+// Global Constants
+
+//Status and Combat bitmask flag constants.
+integer RPHUD = 1;
+integer RUN = 2;
+integer ARMED = 4;
+integer DRAWN = 8;
+integer THROW = 32;
+integer BLOCK = 64;
+integer BLOCKING = 96;
+
+//Faction Identification bitmask constants.
+integer RED = 00;
+integer BLUE = 128;
+integer YELLOW = 256;
+integer GREEN = 384;
+    // More faction identification values, a list used by ColorByClass() to set HUD color.
+list fac2color =
+[
+"UAP", <0,1,1>, // User Application
+"SYS", <1, 1,0>, // System Process
+"VIR", <0,1,0>, // Viral
+"ICP", <1,0,0> // Intrusion Countermeasure Protocol/Program
+
+];
+
+//Constants to determine location where hud is being used.
+integer SIM = 512;
+integer ARENA = 1024;
+
+//Global Variables
+
+key iddprop;
+key iddholster;
+key ignoreidd;
+// Objects that will be noticed by the HUD in collision tests.
+list ouchies = ["IDD", "DEREZZER"];
+list allbetters = ["D2REBOOT"];
+list weaponmakerkeys = ["b3b7600d-2429-4096-b551-b6eeac079569"];
+list reloadpoints = ["Roleplay Collective", "http://slurl.com/secondlife/Roleplay%20Collective/231/17/2597"];
+
+
+//UDF for polling important data, such as Status Bitmask as well as integrity and energy values saved in Hud Description text.
+
+// Checkstatus() returns a list, containing three integers: Status, Integriy, and Energy. It is then used in pollconfig(), pollintegrity(), and pollenergy(), which return the individual values. Remember that checkstatus is a list, and may be substituted for functions that require more than one value.
+
+list checkstatus()
+{
+    list d2sep = ["#"];
+    list d2space = [""];
+    string desc = llGetObjectDesc();
+    list liststatus = llParseString2List(desc, d2sep, d2space);
+    integer config = (integer)llList2String(liststatus, 0);
+    integer integrity = (integer)llList2String(liststatus, 1);
+    integer energy = (integer)llList2String(liststatus, 2);
+    liststatus = [config, integrity, energy];
+    return liststatus;
+}
+
+integer pollconfig()
+{
+    return llList2Integer(checkstatus(), 0);
+}
+
+integer pollintegrity()
+{
+    return llList2Integer(checkstatus(), 1);
+}
+
+integer pollenergy()
+{
+    return llList2Integer(checkstatus(), 2);
+}
+
+//updategui is for updating energy and health bars on the HUD.
+
+updategui(integer guihealth, integer guienergy)
+{
+        llMessageLinked(LINK_ALL_CHILDREN, llRound(1000*guihealth / 100), "Integrity", NULL_KEY);
+        llMessageLinked(LINK_ALL_CHILDREN, llRound(1000*guienergy / 100), "Energy", NULL_KEY);
+}
+
+//These are a series of UDF's that allow you to make changes to the Hud Description. The primary workhorse is updatefullstatus(), which requires you input in all three values to be updated. It is not meant to be used manually, it supports the UDF's that follow. This will probably be further streamlined in a future update. The other smaller UDF's are for changing individual bits in the Status Field. All of them use updatestatus() in their design, so you will not require to update full status. Finally, newintegrity() and newenergy() will update the two values as well, which when called, require an integer argument wich is ADDED to the existing value. Damage and energy use should ALWAYS be a negative integer, and increases in either value should be a positive integer.
+
+updatefullstatus(integer status, integer integrity, integer energy)
+{
+    list newstatus = [status, integrity, energy];
+    
+    llSetObjectDesc(llDumpList2String(newstatus, "#"));
+}
+
+setrun(integer input)
+{
+    integer currentstatus = pollconfig();
+    if(input)
+    {
+        currentstatus = currentstatus | RUN;
+    }
+    else
+    {
+        currentstatus = currentstatus & ~RUN;
+    }
+    updatefullstatus(currentstatus, pollintegrity(), pollenergy());
+}
+
+setarmed(integer input)
+{
+    integer currentstatus = pollconfig();
+    if(input)
+    {
+        currentstatus = currentstatus | ARMED;
+    }
+    else
+    {
+        currentstatus = currentstatus & ~ARMED;
+    }
+    updatefullstatus(currentstatus, pollintegrity(), pollenergy());
+}
+
+setdrawn(integer input)
+{
+    integer currentstatus = pollconfig();
+    if(input)
+    {
+        currentstatus = currentstatus | DRAWN;
+    }
+    else
+    {
+        currentstatus = currentstatus & ~DRAWN;
+    }
+    updatefullstatus(currentstatus, pollintegrity(), pollenergy());
+}
+
+setthrow(integer input)
+{
+    integer currentstatus = pollconfig();
+    if(input)
+    {
+        currentstatus = currentstatus | THROW;
+    }
+    else
+    {
+        currentstatus = currentstatus & ~THROW;
+    }
+    updatefullstatus(currentstatus, pollintegrity(), pollenergy());
+}
+
+setblock(integer input)
+{
+    integer currentstatus = pollconfig();
+    if(input)
+    {
+        currentstatus = currentstatus | BLOCK;
+    }
+    else
+    {
+        currentstatus = currentstatus & ~BLOCK;
+    }
+    updatefullstatus(currentstatus, pollintegrity(), pollenergy());
+}
+
+// This is a polling UDF, for data, but it does not poll the description field as the above. This is reliant up on the proper object name, and if the HUD sold with the avatars is not the correct type, then this will not return proper values.
+
+integer programtype()
+{
+    integer program_type = 0;
+    string hudtitle = llGetSubString(llGetObjectName(), 0, 3);
+    if(hudtitle == "D2IC")
+    {
+        program_type = 0;
+    }
+    if(hudtitle == "D2UA")
+    {
+        program_type = 128;
+    }
+    if(hudtitle == "D2SY")
+    {
+        program_type = 256;
+    }
+    if(hudtitle == "D2VI")
+    {
+        program_type = 384;
+    }
+    return program_type;
+}
+
+// This function is also reliant upon object name. It uses the D2XXX, where XXX is program type abbreviation, to determine what color the hud will be.
+
+vector ColorByClass(string src)
+{
+    integer indexval = llListFindList(fac2color, [llGetSubString(llGetObjectName(), 2, 4)])+1;
+    
+    vector output = llList2Vector(fac2color, indexval);
+    return output;
+}
+
+//Pchatchan() is an modular general function of the official D² UDF Library. Requests for details should be sent to D² Lead Code or Jera Saphir directly.
+
+integer pchatchan(integer activate)
+{
+    integer chatcontrolos;
+    string preoid = "0x";
+    key oid = llGetOwner();
+    string soid = (string)oid;
+    soid = llGetSubString(soid, -4, -1);
+    soid = preoid + soid;
+    integer chatchan = (integer)soid;
+    if(activate)
+    {
+        chatcontrolos = llListen(chatchan, "", NULL_KEY, "");
+        return chatchan;
+    }
+    else
+    {
+        llListenRemove(chatcontrolos);
+        return chatchan;
+    }
+}
+
+// The following UDF's are for collision detection. Each one is integrated into the combat system to provide easy access to important data, without cluttering the main script engine with repetitious conditional testing.
+
+//usage "list collisionconcern(key objectcollision, list [list of prefixes to use]);
+
+list collisionconcern(key objectcollision, list objectsofconcern)
+{
+    string objectcollisionname = llList2String(llGetObjectDetails(objectcollision, [OBJECT_NAME]), 0);
+    integer iterations = llGetListLength(objectsofconcern);
+    integer loop;
+    for(loop = 0; loop < iterations; ++loop)
+    {
+        integer prefixlength = llStringLength(llList2String(objectsofconcern, loop)) - 1;
+        string prefix = llGetSubString(objectcollisionname, 0, prefixlength);
+        if(prefix == llList2String(objectsofconcern, loop))
+        {
+            return [llList2String(objectsofconcern, loop), objectcollision];
+        }
+    }
+    return ["ignore", NULL_KEY];
+}
+
+// Norton is a MUDF, Macro User Defined Function for use in Digital Dynamix RP and Combat Sim. The Dataset should consist of a string and uuid key, which will be called name and id respectively in the function.
+
+norton(list dataset)
+{
+    string name = llList2String(dataset, 0);
+    string id = llList2Key(dataset, 1);
+    if(name == "IDD");
+    {
+        iddcollide(id);
+    }
+    if(name == "DEREZZER")
+    {
+        derezzme();
+        state derezz;
+    }
+}
+
+unnorton(list dataset)
+{
+    string name = llList2String(dataset, 0);
+    string id = llList2Key(dataset, 1);
+    if(name == "D2REBOOT")
+    {
+        llOwnerSay("Reinitialize by clicking the red power button.");
+        updatefullstatus(pollconfig(), 100, 100);
+        setrun(TRUE);
+        state default;
+    }
+}
+
+
+//idcollide is for registering and determining disc damage.
+  
+iddcollide(key idd)
+{
+    integer health;
+    list discsep = ["d_sep"];
+    list discspace = [""];
+    list iddprofile = llGetObjectDetails(idd, [OBJECT_OWNER, OBJECT_DESC]);
+    if(llList2Key(iddprofile, 0) != llGetOwner())
+    {
+        health = pollintegrity();
+        health -= (integer)llList2String(llParseString2List(llList2String(iddprofile, 1), discsep, discspace), 0);
+        if(health <= 0)
+        {
+            derezzme();
+            setrun(FALSE);
+            updatefullstatus(pollconfig(), 0, 0);
+            updategui(0, 0);
+            state derezz;
+        }
+        else if(health >= 100)
+        {
+            health = 100;
+            updategui(health, pollenergy());
+            updatefullstatus(pollconfig(), 100, pollenergy());
+        }
+            
+        else
+        {
+            updategui(health, pollenergy());
+            updatefullstatus(pollconfig(), health, pollenergy());
+        }
+    }
+    llSleep(.5);
+}
+
+// The following functions are used for setting up Derezz FX, which includes the playing of the animations. It will also set RUN to false (bitmask, not the script itself). It does NOT switch states, that must be done explicitely. Derezzme will soon be reconfigured so it takes arguments based on a short list of constants that are self contained. This shall allow for easy and simple configuration of how it is used, including the use of it for teleports and other partial derezz effects.
+
+derezzme()
+{
+    updatefullstatus(pollconfig(), 0, 0);
+    updategui(0, 0);
+    derezzgraphic(programtype(), GREEN);
+    setrun(FALSE);
+    powertoggle(2);
+}
+
+//Function for creating FX effects when derezzing.
+
+derezzgraphic(integer MyTeam, integer TheirTeam)
+{
+    //Adjust Team Colors
+    /*
+        start colors                
+                RED = 00
+                BLUE = 128
+                YELLOW = 256
+                GREEN =  384
+        
+    */
+    integer A;
+    if (MyTeam == 00) A = 01;
+    if (MyTeam == 128) A = 02;
+    if (MyTeam == 256) A = 04;
+    if (MyTeam == 384) A = 08;
+    //16
+    //32
+    //64
+    //128
+    integer B;
+    if (TheirTeam == 00) B = 256;
+    if (TheirTeam == 128) B = 512;
+    if (TheirTeam == 256) B = 1024;
+    if (TheirTeam == 384) B = 2048;
+    
+    
+    //***
+    integer i;
+    list BB = llGetBoundingBox(llGetOwner());
+        vector D = llList2Vector(BB, 1)-llList2Vector(BB, 0);
+        float H = D.z*1.1;
+        
+    float steps = 5;
+    
+    llTriggerSound("a7c539ef-955b-c8f3-11e1-47d4487ac095", 1);
+    for(i=1; i<=steps; i++)
+    {
+        // llSay(0, "Running step " + (string)i);
+        llRezObject("DeRez Glyph", llGetPos()-<0,0,H/2>+(<0,0,H/steps>*i), ZERO_VECTOR,ZERO_ROTATION, A+B);
+    }
+}
+
+powertoggle(integer linknum)
+{
+    if(pollconfig() & RUN)
+    {
+        llSetLinkColor(linknum, <0, 1, 0>, ALL_SIDES);
+    }
+    else
+    {
+        llSetLinkColor(linknum, <1,0,0>, ALL_SIDES);
+    }
+}
+
+integer drawdisc(integer linknum)
+{
+    if(pollconfig() & RUN)
+    {
+        if(pollconfig() & DRAWN)
+        {
+            setdrawn(FALSE);
+            llSetLinkPrimitiveParams(linknum,[PRIM_TEXTURE,ALL_SIDES,"5f38a08c-1281-907a-8da3-974b81154f1e",<0.5,1.0,0>,<0.25001,0,0>,0]); //Inactive
+            llHTTPRequest(prop_URL,[HTTP_METHOD,"POST",HTTP_MIMETYPE,"application/x-www-form-urlencoded"],"check_config");
+            llHTTPRequest(holster_URL,[HTTP_METHOD,"POST",HTTP_MIMETYPE,"application/x-www-form-urlencoded"],"check_config");
+        }
+        else
+        {
+            setdrawn(TRUE);
+            llSetLinkPrimitiveParams(linknum,[PRIM_TEXTURE,ALL_SIDES,"5f38a08c-1281-907a-8da3-974b81154f1e",<0.5,1.0,0>,<-0.25001,0,0>,0]); //Active
+            llHTTPRequest(prop_URL,[HTTP_METHOD,"POST",HTTP_MIMETYPE,"application/x-www-form-urlencoded"],"check_config");
+            llHTTPRequest(holster_URL,[HTTP_METHOD,"POST",HTTP_MIMETYPE,"application/x-www-form-urlencoded"],"check_config");
+
+        }
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+     
+string url; //String to hold our local URL
+get_URL()
+{
+    if (url!="") //If we have a URL, release it, don't need more than one
+    {
+        llReleaseURL(url); //Release the URL
+        url = "";
+    }
+    llRequestURL(); //Request a new URL
+}
+
+string holster_URL; //This will hold the remote URL for the holster object
+string prop_URL; //This will hold the remote URL for the prop object  
+
+// The program begins here. This is the actual engine. Everything before it was UDF or variable definition. We are trying to keep variables to a minimum, so most variables have been moved to local scopes.
+
+
+default
+{
+    state_entry()
+    {
+        pchatchan(FALSE);
+        llSetColor(<0,0,0>, ALL_SIDES);
+        iddprop = NULL_KEY;
+        iddholster = NULL_KEY;
+        updatefullstatus(pollconfig(), 100, pollenergy());
+        state initialize;
+    }
+}
+
+state initialize
+{
+    state_entry()
+    {
+        llSetLinkPrimitiveParams(9,[PRIM_TEXTURE,ALL_SIDES,"5f38a08c-1281-907a-8da3-974b81154f1e",<0.5,1.0,0>,<0.25001,0,0>,0]); //Inactive
+        if(pollconfig() & RUN)
+        {}
+        else
+        {
+            powertoggle(2);
+        }
+        // llSay(0, (string)programtype());
+        updatefullstatus(programtype(), pollintegrity(), pollenergy());
+        iddprop = NULL_KEY;
+        iddholster = NULL_KEY;
+    }
+
+    on_rez(integer start_param)
+    {
+        llResetScript();
+        state default;
+    }
+    
+    listen(integer channel, string name, key id, string message)
+    {
+        list check = llParseString2List(message,["^"],[]);
+        if(llList2String(check,0) == "iddprop")
+        {
+            iddprop = id;
+            prop_URL = llList2String(check,1);
+            // llSay(0,"Got Prop URL: "+prop_URL);
+        }
+        if(llList2String(check,0) == "iddholster")
+        {
+            iddholster = id;
+            holster_URL = llList2String(check,1);
+            // llSay(0,"Got Holster URL: "+holster_URL);            
+        }
+        if(iddholster != NULL_KEY && iddprop != NULL_KEY)
+        {
+            llSay(pchatchan(FALSE), "confirmed");
+            setarmed(TRUE);
+            llSetTimerEvent(0);
+            updategui(pollintegrity(), pollenergy());
+            if(pollintegrity() == 0)
+            {
+                derezzme();
+                state derezz;
+            }
+            derezzgraphic(programtype(), programtype());
+            setrun(TRUE);
+            powertoggle(2);
+            llMessageLinked(LINK_SET,100,prop_URL+"^"+holster_URL,"");
+            state run_time_operation;
+        }
+    }
+    
+    touch_start(integer num_detected)
+    {
+        integer touchcontrol = llDetectedLinkNumber(num_detected - 1);
+        if(touchcontrol == 2)
+        {
+            llOwnerSay("Initializing, please wait...");
+            llSay(pchatchan(TRUE), "handshake");
+            llSetTimerEvent(30);
+        }
+        else if(touchcontrol == 9)
+        {
+            llOwnerSay("Please initialize by pressing the Red Power Button.");
+            llSetLinkPrimitiveParams(touchcontrol,[PRIM_TEXTURE,ALL_SIDES,"5f38a08c-1281-907a-8da3-974b81154f1e",<0.5,1.0,0>,<0.25001,0,0>,0]); //Inactive
+        }
+    }
+    
+    
+    timer()
+    {
+        if(iddholster != NULL_KEY && iddprop != NULL_KEY)
+        {
+            llSay(pchatchan(FALSE), "confirmed");
+            setarmed(TRUE);
+            setrun(TRUE);
+            powertoggle(2);
+            state run_time_operation;
+        }
+        else
+        {
+            llOwnerSay("Initialization failed. Please make sure you are wearing the iddprop and iddholster, then detach and reattach the hud and attempt to reinitialize.");
+        }
+        llSetTimerEvent(0);
+    }
+    
+    state_exit()
+    {
+        llSetTimerEvent(0);
+    }
+}
+
+state run_time_operation
+{
+    state_entry()
+    {
+        llHTTPRequest(update_URL,[HTTP_METHOD,"POST",HTTP_MIMETYPE,"application/x-www-form-urlencoded"],"uv="+(string)current_version+"&uk="+(string)llGetOwner()+"&on="+object_name); //Replace your function call with this one
+        string ProgClass = llGetSubString(llGetObjectName(), 2, 4);
+        llSetColor(ColorByClass(ProgClass), ALL_SIDES);
+        if(pollintegrity() < 1)
+        {
+            state derezz;
+        }
+        else
+        {
+            llSay(0, "Program RunTimeOp" + (string)pchatchan(FALSE) + ".exe running.");
+        }
+    }
+
+    link_message(integer sender, integer num, string msg, key id)
+    {
+        if(msg == "draw")
+        {
+            setdrawn(TRUE);
+        }
+        if(msg == "holster")
+        {
+            setdrawn(FALSE);
+        }
+    }
+    
+    collision_start(integer num_detected)
+    {
+        list contact = collisionconcern(llDetectedKey(num_detected - 1), ouchies);
+        // llSay(0, llList2String(contact, 0));
+        if(llList2String(contact, 0) != "ignore")
+        {
+            norton(contact);   
+        }
+    }
+    touch_start(integer num_detected)
+    {
+        integer touchcontrol = llDetectedLinkNumber(num_detected - 1);
+        if(touchcontrol == 9)
+        {
+            /* if((iddprop == NULL_KEY) && (iddholster == NULL_KEY))
+            {
+                llOwnerSay("Disc Datalink Failure. Touch Power Again to Reinitialize.");
+                llResetScript();
+            } */
+            drawdisc(touchcontrol);
+        }
+        else if(touchcontrol == 2)
+        {
+            llOwnerSay("Resetting... please wait.");
+            llShout(0, llKey2Name(llGetOwner()) + " has resetting their run cycle.");
+            llResetScript();
+        }
+        
+    }
+
+// THIS AREA IS COMMENTED OUT FOR A REASON. TO BE WORKED ON LATER.
+/*    timer()
+    {
+        if(ignoreidd != NULL_KEY)
+        {
+            // llSay(0, (string)ignoreidd);
+            // llSay(0, llKey2Name(llList2Key(llGetObjectDetails(ignoreidd, [OBJECT_OWNER]), 0)) + "'s " + llKey2Name(ignoreidd) + " is no longer ignored.");
+            llSetTimerEvent(0);
+            ignoreidd = NULL_KEY;
+        }
+        else
+        {
+            llSetTimerEvent(0);
+        }
+    }
+*/
+    attach(key id)
+    {
+        llResetScript();
+    }
+}
+
+state derezz
+{
+    state_entry()
+    {
+        
+    }
+    collision_start(integer num_detected)
+    {
+        list contact = collisionconcern(llDetectedKey(num_detected - 1), allbetters);
+        if(llList2String(contact, 0) != "ignore")
+        {
+            unnorton(contact);
+        }
+    }
+            touch_start(integer num_detected)
+    {
+        integer touchcontrol = llDetectedLinkNumber(num_detected - 1);
+        if(touchcontrol == 9)
+        {
+            llOwnerSay("Please initialize by pressing the Red Power Button.");
+            llSetLinkPrimitiveParams(touchcontrol,[PRIM_TEXTURE,ALL_SIDES,"5f38a08c-1281-907a-8da3-974b81154f1e",<0.5,1.0,0>,<0.25001,0,0>,0]); //Inactive
+        }
+        else if(touchcontrol == 2)
+        {
+            llOwnerSay("Resetting... please wait.");
+            llShout(0, llKey2Name(llGetOwner()) + " has resetting their run cycle.");
+            llResetScript();
+        }
+      
+    }    
+}
+
+D2 Holster Comm Script
+
+//Pulling config file from HUD
+key d2hudid;
+
+vector OutterGlow = <0.30013, 0.30013, 0.07786>; //Used for Brisby's Build/Deconstruct UDF's
+
+//Status and Combat bitmask flag constants.
+integer RPHUD = 1;
+integer RUN = 2;
+integer ARMED = 4;
+integer DRAWN = 8;
+integer THROW = 32;
+integer BLOCK = 64;
+integer BLOCKING = 96;
+
+//Faction Identification bitmask constants.
+integer RED = 00;
+integer BLUE = 128;
+integer YELLOW = 256;
+integer GREEN = 384;
+
+//Constants to determine location where hud is being used.
+integer SIM = 512;
+integer ARENA = 1024;
+
+integer pchatchan(integer activate)
+{
+    integer chatcontrolos;
+    string preoid = "0x";
+    key oid = llGetOwner();
+    string soid = (string)oid;
+    soid = llGetSubString(soid, -4, -1);
+    soid = preoid + soid;
+    integer chatchan = (integer)soid;
+    if(activate)
+    {
+        chatcontrolos = llListen(chatchan, "", NULL_KEY, "");
+        return chatchan;
+    }
+    else
+    {
+        llListenRemove(chatcontrolos);
+        return chatchan;
+    }
+}
+
+list check_status()
+{
+    list d2sep = ["#"];
+    list d2space = [""];
+    string desc = llList2String(llGetObjectDetails(d2hudid,[OBJECT_DESC]),0);
+    list liststatus = llParseString2List(desc, d2sep, d2space);
+    integer config = (integer)llList2String(liststatus, 0);
+    integer integrity = (integer)llList2String(liststatus, 1);
+    integer energy = (integer)llList2String(liststatus, 2);
+    liststatus = [config, integrity, energy];
+    return liststatus;
+}
+
+integer pollconfig()
+{
+    return llList2Integer(check_status(), 0);
+}
+
+///Brisby's Build/Deconstruct UDF's for showing/hiding disc prop
+Build()
+{
+    llSetLinkAlpha(LINK_THIS, .01, ALL_SIDES);
+    llSetScale((vector)OutterGlow);
+    
+    llSetLinkPrimitiveParams(LINK_SET, [PRIM_GLOW, ALL_SIDES, 0.3]);
+    llSleep(0.2);
+    llSetLinkPrimitiveParams(2, [PRIM_GLOW, ALL_SIDES, 0.0]);
+    llSleep(0.2);
+    llSetLinkPrimitiveParams(3, [PRIM_GLOW, ALL_SIDES, 0.0]);
+    llSleep(0.2);
+    llSetLinkPrimitiveParams(4, [PRIM_GLOW, ALL_SIDES, 0.0]);
+    integer x;
+    for(x=1; x<=20; x++)
+    {
+        llSetLinkAlpha(LINK_ALL_CHILDREN, 0.05*x, ALL_SIDES);
+        llSleep(0.05);
+    }
+    llSleep(1);
+    llSetScale(<0.01,0.01,0.01>);
+}
+Deconstruct()
+{
+    llSetLinkAlpha(LINK_THIS, .01, ALL_SIDES);
+    llSetScale((vector)OutterGlow);
+    llSetLinkAlpha(LINK_ALL_CHILDREN, 0, ALL_SIDES);
+    llSetLinkPrimitiveParams(LINK_ALL_CHILDREN, [PRIM_GLOW, ALL_SIDES, 0.00]);
+    integer x;
+    for(x = 10; x >= 0; x--)
+    {
+        llSetScale(llGetScale()*(0.1*x));
+        llSleep(0.02*x*(x/2));
+    }
+    llSetLinkAlpha(LINK_THIS, 0, ALL_SIDES);
+}
+
+string url; //String to hold our local URL
+get_URL()
+{
+    if (url!="") //If we have a URL, release it, don't need more than one
+    {
+        llReleaseURL(url); //Release the URL
+        url = "";
+    }
+    llRequestURL(); //Request a new URL
+}
+
+default
+{
+    state_entry()
+    {
+        pchatchan(TRUE);
+    }
+    
+    on_rez(integer i)
+    {
+        pchatchan(TRUE);
+        get_URL(); //Request a URL
+    }
+    
+    listen(integer chatchan, string name, key id, string message)
+    {
+        // llSay(0, message + " on channel " + (string)chatchan);
+        if(message == "handshake")
+        {
+            llSay(pchatchan(TRUE), "iddholster^"+url);
+            d2hudid = id;
+        }
+        if(message == "confirmed")
+        {
+            pchatchan(FALSE);
+        }
+    }          
+    
+    changed(integer c)
+    {
+        //Check for conditions that would reset the prims URL, request new URL
+        if (c & (CHANGED_REGION | CHANGED_REGION_START | CHANGED_TELEPORT) )
+        {
+            get_URL();
+        }
+    }
+
+    http_request(key id, string method, string body) //This event is raised if something is sent to the objects URL
+    {
+        if (method == URL_REQUEST_GRANTED) //We recieved a new URL
+        {
+            url = body; //Store our new URL
+        }
+        else if (method == URL_REQUEST_DENIED) //We were denied a URL
+        {
+            llSay(0,"Error, URL request denied!\n"+body); //We were denied a URL!
+        }
+        else if (method == "POST") //We are recieveing a message from the HUD
+        {
+            if (body == "check_config") //Lets check the HUD config
+            {
+                integer bitmasks = pollconfig(); //Store the config status
+                if (bitmasks & DRAWN) //Disk is drawn, hide the holster
+                {
+                    // llSay(0,"Disk Drawn");
+                    Deconstruct();
+                }
+                else //Disc is holstered, show the holster
+                {
+                    // llSay(0,"Disc Holstered");
+                    Build();
+                }
+            }
+        }
+    }
+
+    state_exit()
+    {
+    }
+}
+
+D2 Disc Prop Com Script
+
+// Global Constants
+key d2hudid;
+
+vector OutterGlow = <0.30013, 0.30013, 0.07786>; //Used for Brisby's Build/Deconstruct UDF's
+
+//Status and Combat bitmask flag constants.
+integer RPHUD = 1;
+integer RUN = 2;
+integer ARMED = 4;
+integer DRAWN = 8;
+integer THROW = 32;
+integer BLOCK = 64;
+integer BLOCKING = 96;
+
+//Faction Identification bitmask constants.
+integer RED = 00;
+integer BLUE = 128;
+integer YELLOW = 256;
+integer GREEN = 384;
+
+//Constants to determine location where hud is being used.
+integer SIM = 512;
+integer ARENA = 1024;
+
+integer pchatchan(integer activate)
+{
+    integer chatcontrolos;
+    string preoid = "0x";
+    key oid = llGetOwner();
+    string soid = (string)oid;
+    soid = llGetSubString(soid, -4, -1);
+    soid = preoid + soid;
+    integer chatchan = (integer)soid;
+    if(activate)
+    {
+        chatcontrolos = llListen(chatchan, "", NULL_KEY, "");
+        return chatchan;
+    }
+    else
+    {
+        llListenRemove(chatcontrolos);
+        return chatchan;
+    }
+}
+
+list check_status()
+{
+    list d2sep = ["#"];
+    list d2space = [""];
+    string desc = llList2String(llGetObjectDetails(d2hudid,[OBJECT_DESC]),0);
+    list liststatus = llParseString2List(desc, d2sep, d2space);
+    integer config = (integer)llList2String(liststatus, 0);
+    integer integrity = (integer)llList2String(liststatus, 1);
+    integer energy = (integer)llList2String(liststatus, 2);
+    liststatus = [config, integrity, energy];
+    return liststatus;
+}
+
+integer pollconfig()
+{
+    return llList2Integer(check_status(), 0);
+}
+
+///Brisby's Build/Deconstruct UDF's for showing/hiding disc prop
+Build()
+{
+    llSetLinkAlpha(LINK_THIS, .01, ALL_SIDES);
+    llSetScale((vector)OutterGlow);
+    
+    llSetLinkPrimitiveParams(LINK_SET, [PRIM_GLOW, ALL_SIDES, 0.3]);
+    llSleep(0.2);
+    llSetLinkPrimitiveParams(2, [PRIM_GLOW, ALL_SIDES, 0.0]);
+    llSleep(0.2);
+    llSetLinkPrimitiveParams(3, [PRIM_GLOW, ALL_SIDES, 0.0]);
+    llSleep(0.2);
+    llSetLinkPrimitiveParams(4, [PRIM_GLOW, ALL_SIDES, 0.0]);
+    integer x;
+    for(x=1; x<=20; x++)
+    {
+        llSetLinkAlpha(LINK_ALL_CHILDREN, 0.05*x, ALL_SIDES);
+        llSleep(0.05);
+    }
+    llSleep(1);
+    llSetScale(<0.01,0.01,0.01>);
+    //llSetAlpha
+}
+Deconstruct()
+{
+    llSetLinkAlpha(LINK_THIS, .01, ALL_SIDES);
+    llSetScale((vector)OutterGlow);
+    llSetLinkAlpha(LINK_ALL_CHILDREN, 0, ALL_SIDES);
+    llSetLinkPrimitiveParams(LINK_ALL_CHILDREN, [PRIM_GLOW, ALL_SIDES, 0.00]);
+    integer x;
+    for(x = 10; x >= 0; x--)
+    {
+        llSetScale(llGetScale()*(0.1*x));
+        llSleep(0.02*x*(x/2));
+    }
+    llSetLinkAlpha(LINK_THIS, 0, ALL_SIDES);
+}
+
+string url; //String to hold our local URL
+get_URL()
+{
+    if (url!="") //If we have a URL, release it, don't need more than one
+    {
+        llReleaseURL(url); //Release the URL
+        url = "";
+    }
+    llRequestURL(); //Request a new URL
+}
+
+default
+{
+    state_entry()
+    {
+        pchatchan(TRUE);
+    }
+        
+    on_rez(integer i)
+    {
+        pchatchan(TRUE);
+        get_URL(); //Request a URL
+    }
+    
+    changed(integer c)
+    {
+        //Check for conditions that would reset the prims URL, request new URL
+        if (c & (CHANGED_REGION | CHANGED_REGION_START | CHANGED_TELEPORT) )
+        {
+            get_URL();
+        }
+    }
+    
+    http_request(key id, string method, string body) //This event is raised if something is sent to the objects URL
+    {
+        if (method == URL_REQUEST_GRANTED) //We recieved a new URL
+        {
+            url = body; //Store our new URL
+            // llSay(0,"Got my URL");
+        }
+        else if (method == URL_REQUEST_DENIED) //We were denied a URL
+        {
+            llSay(0,"Error, URL request denied!\n"+body); //We were denied a URL!
+        }
+        else if (method == "POST") //We are recieveing a message from the HUD
+        {
+            // llSay(0,"Saw POST from HUD");
+            if (body == "check_config") //Lets check the HUD config
+            {
+                integer bitmasks = pollconfig(); //Store the config status
+                if (bitmasks & DRAWN) //Disk is drawn, hide the prop
+                {
+                    // llSay(0,"Disc Drawn");                    
+                    Build();
+                }
+                else //Disc is holstered, show the prop
+                {
+                    // llSay(0,"Disc holstered");                    
+                    Deconstruct();
+                }
+            }
+        }
+    }
+    
+    listen(integer chatchan, string name, key id, string message)
+    {
+        // llSay(0, message + " on channel " + (string)chatchan);
+        if(message == "handshake")
+        {
+            llSay(pchatchan(TRUE), "iddprop^"+url);
+            d2hudid = id;
+        }
+        if(message == "confirmed")
+        {
+            pchatchan(FALSE);
+        }
+    }
+}
+
+D2 Disc IDD Flight Script
+
+// For unpacking 255 for the second byte, and 65280 for the first, going left to right.
+
+//Useful constants to define disk life cycle
+integer outbound_life = 50;
+integer inbound_life = 120;
+integer counter = 0;
+
+float arm_distance = 0.1;
+
+//Object maxspeed and acceleration in m/s and m/s^2 respectively
+float speed = 30;
+float accel = 3;
+
+//This is the max distance, in meters, that the disc should take before returning
+float max_distance = 100;
+float rebound_distance = 20;
+
+//The closer the LOS is to 1, the sharper it will turn
+//Too sharp turns creates zig-zag behaviour
+float LOS_outbound = 1.4;
+
+//Variables to be used for disc combat configuration including damage, disc state, and FX.
+//These become a special string to be parsed into a list during flight.
+integer damage;
+string discstate;
+string discfx;
+string discsep = "d_sep"; //Seperator for dumping to list. Used in comm with launcher.
+list discspace = [""]; //Spacer for dumping to list. Used in comm with launcher.
+list desc; //Used for setting disc's description.
+string strdesc; //Thisis what description becomes when converted to string.
+integer disccontrol; //This is the integer for the disc recall, may not be neccessary.
+integer enemyblock; //This is the integer for the enemy block routines, may not be neccessary.
+integer disckill; //This is to kill the disc if it's stuck and not blocked.
+integer enemydeflect; // This is for when an enemy deflects your disc. They can control it then.
+integer chatchan = -1764; //D²'s primary communication channel.
+key enemyav;
+string IDDReturn; //Object to be rezzed on inbound state.
+key iddreturnkey; //Key to be used to track the new disc to see if it's still alive.
+integer mbitmask;
+
+move_to_target (vector target) {
+    
+    //Antigravity force
+    vector antigravity = <0,0,9.8>;
+    
+    //Desired direction and distance
+    vector path_to_target = target - llGetPos();
+    float distance = llVecMag(path_to_target);
+    
+    //Disc desired vector
+    vector desired_vector = speed * llVecNorm(path_to_target);
+    
+    //Adjust desired vector when close to ensure that disc does not overshoot
+    if ( distance < accel )
+    {
+           desired_vector = 2 * path_to_target;
+    }
+    
+    //Actual Vector
+    vector current_vector = llGetVel();
+    
+    //Corrective force is direction of desired - current, times accel
+    vector engine_force = accel * (desired_vector - current_vector);
+    
+    //Add forces together, multiply by mass, and we're good to go
+    vector final_force = engine_force + antigravity;
+    llSetForce( llGetMass() * final_force , FALSE );
+}
+
+try_arming ()
+{
+     list params = llGetObjectDetails(llGetOwner(),[OBJECT_POS]);
+    //disc will not arm unless it is at least arm_distance away
+    if (llVecMag(llGetPos() - llList2Vector(params,0)) > arm_distance) {
+        state outbound;   
+    }
+}
+
+//This Function will return 1 for an Agent, 2, for a Block Shield, and 0 for everything else.
+
+integer whathitme(integer detectedtype, string detectedname)
+{
+    integer colnum;
+    integer value = 0;
+    if(detectedtype & AGENT)
+    {
+        value = 1;
+        return value;
+    }
+    if(detectedname == "blockshield")
+    {
+        value = 2;
+        return value;
+    }
+    return value;
+}
+
+string getiddname()
+{
+    integer stuff = 0;
+    string thisone;
+    integer items = 0;
+    for(stuff = 0; stuff != 1; items++)
+    {
+        thisone = llGetInventoryName(6, items);
+        if(llGetSubString(thisone, 0, 2) == "IDD")
+        {
+            return thisone;
+            stuff = 1;
+        }
+        if(thisone == "")
+        {
+        stuff = 1;
+        }
+    }
+    llOwnerSay("ERROR: Could not find IDD Return Object. Contact Jera Saphir.");
+    return thisone;
+}
+
+list byteunpackerx2()
+{
+    integer byte1 = mbitmask >> 8;
+    integer byte2 = 255 & mbitmask;
+    list output = [byte1, byte2];
+    return output;
+}
+
+vector factioncolor()
+{
+    integer mycolor = llList2Integer(byteunpackerx2(), 0);
+    integer indexval = llListFindList(fac2color, [mycolor])+1;
+    vector output = llList2Vector(fac2color, indexval);
+    return output;
+}
+
+integer damagecheck()
+{
+    return llList2Integer(byteunpackerx2(), 1);
+}
+
+
+
+list fac2color =
+[
+1, <0,1,1>, // User Application
+2, <1, 1,0>, // System Process
+3, <0,1,0>, // Viral
+4, <1,0,0> // Intrusion Countermeasure Protocol/Program
+
+];
+
+default {
+     on_rez(integer start_param) 
+     {
+         if(0 == start_param)
+         {
+             llSetColor(<1,1,1>, ALL_SIDES);
+             llSetStatus(STATUS_ROTATE_X | STATUS_ROTATE_Y | STATUS_ROTATE_Z, FALSE);
+             llSay(0, "Idling");
+         }
+         else
+         {
+             mbitmask = start_param;
+             llSetColor(factioncolor(), ALL_SIDES);
+             damage = damagecheck();
+             //bullet tries arming right away, then cycles the clock
+             try_arming();
+             llSetTimerEvent(0.1);
+         }
+     }
+     
+    timer()
+    {
+        try_arming();
+    }
+        
+   
+ }
+ 
+state outbound {
+    state_entry() {
+        counter = 0;
+        discstate = "outbound";
+        desc = [damage, discstate, discfx];
+        strdesc = llDumpList2String(desc, discsep);
+        llSetObjectDesc(strdesc);
+        disccontrol = llListen(chatchan, "", NULL_KEY, "recall");
+        enemyblock = llListen(chatchan, "", NULL_KEY, "block");
+        disckill = llListen(chatchan, "", NULL_KEY, "recalldie");
+        llSetTimerEvent(0.1);
+    }
+    
+     timer() { 
+        list params = llGetObjectDetails(llGetOwner(),[OBJECT_POS, OBJECT_ROT]);
+        vector owner_pos = llList2Vector(params,0);
+        vector owner_vision = llVecNorm(llRot2Fwd(llList2Rot(params,1)));
+        
+        float distance = llVecMag(llGetPos() - owner_pos+<0,0,.5>);
+        vector target = owner_pos + (LOS_outbound * distance * owner_vision);
+        
+        move_to_target(target);
+        
+        counter = counter + 1;
+        if ( counter >= outbound_life ) { state inbound; }
+        if ( distance > max_distance ) { state inbound; }
+     }
+     
+    collision_start(integer num_detected)
+    {
+        integer thingihit = 0;
+        thingihit = whathitme(llDetectedType(0), llDetectedName(0));
+        if (thingihit == 1)
+        {
+            enemyav = llDetectedKey(0);
+            state inbound;
+        }
+        if(thingihit == 2)
+        {
+            state blocked;
+        }
+        
+    }
+    listen(integer channel, string name, key id, string message)
+    {
+        if(message == "recall" && llList2Key(llGetObjectDetails(id, [OBJECT_OWNER]), 0) == llGetOwner())
+        {
+//            llOwnerSay("DEBUG MESSAGE = Recalling");
+            float factor = 30; // Factor for kickback if stuck in a wall.
+            float oldaccel = accel;
+            accel = factor;
+            list params = llGetObjectDetails(llGetOwner(),[OBJECT_POS]);
+            move_to_target(llList2Vector(params,0));
+            accel = oldaccel;
+            state inbound;
+        }          
+    }
+    state_exit()
+    {
+        llSetTimerEvent(0.0);
+    }
+}
+
+    
+state inbound {
+    state_entry()
+    {
+        counter = 0;
+        discstate = "inbound";
+        desc = [damage, discstate, discfx];
+        strdesc = llDumpList2String(desc, discsep);
+        llSetObjectDesc(strdesc);
+        llSetPrimitiveParams([PRIM_COLOR, ALL_SIDES, ZERO_VECTOR, 0.0, PRIM_GLOW, ALL_SIDES, 0.0, PRIM_PHANTOM, TRUE, PRIM_POINT_LIGHT, FALSE, <1, 1, 1>, 1.0, 10.0, 0.75, PRIM_PHYSICS, FALSE]);
+        vector rezpos = llGetPos();
+        vector rezvel = llGetVel();
+        rotation rezrot = llGetRot();
+        IDDReturn = getiddname();
+        llRezObject(IDDReturn, rezpos, rezvel, rezrot, mbitmask);
+    }
+    object_rez(key id)
+    {
+        iddreturnkey = id;
+        llSetTimerEvent(0.1);
+    }
+    timer()
+    { 
+        if(llList2Vector(llGetObjectDetails(iddreturnkey, [OBJECT_POS]), 0) == ZERO_VECTOR)
+        {
+            llDie();
+        }
+//        else
+//        {
+//            counter = counter + 1;
+//            if ( counter == inbound_life ) { llOwnerSay("Timeout"); }
+//            if ( counter >= inbound_life ) { llDie(); }
+//        }
+     }
+}
+
+state blocked
+{
+    state_entry()
+    {
+        llOwnerSay((string)llKey2Name(enemyav) + " blocked your disc!");
+        damage = 0;
+        discstate = "blocked";
+        desc = [damage, discstate, discfx];
+        strdesc = llDumpList2String(desc, discsep);
+        llSetObjectDesc(strdesc);
+
+        // Determins which direction the blocked disc flies.
+        list params = llGetObjectDetails(enemyav,[OBJECT_POS, OBJECT_ROT]); //Uses Target's View to shoot disc away.
+        vector owner_pos = llList2Vector(params,0);
+        vector owner_vision = llVecNorm(llRot2Fwd(llList2Rot(params,1)));
+        
+        float distance = llVecMag(llGetPos() - owner_pos);
+        vector target = owner_pos + (LOS_outbound * distance * owner_vision);
+        
+        move_to_target(target);
+        llSetPrimitiveParams([PRIM_COLOR, ALL_SIDES, <1,1,1>, PRIM_POINT_LIGHT, TRUE, <1, 1, 1>, 1.0, 10.0, 0.75]);
+        llSetTimerEvent(3.0);
+    }
+
+    timer()
+    {
+        if(llGetStatus(STATUS_PHYSICS))
+        {
+            llSetPrimitiveParams([PRIM_COLOR, ALL_SIDES, ZERO_VECTOR, 0.0, PRIM_GLOW, ALL_SIDES, 0.0, PRIM_PHANTOM, TRUE, PRIM_POINT_LIGHT, FALSE, <1, 1, 1>, 1.0, 10.0, 0.75, PRIM_PHYSICS, FALSE]);
+            llSetTimerEvent(1.5);
+        }
+        else
+        {
+            llSleep(12.5);
+            llDie();
+        }
+    }
+}
+
+
+
+// This is old code, and may need to be removed.
+
+/*
+    collision_start(integer num_detected)
+    {
+        llDie();
+    }
+    collision_end(integer num_detected)
+    {
+        llDie();
+*/
+
+D2 Disc IDD Return Script
+both of this and the flight script are version 4.2.5
+
+//Useful constants to define disk life cycle
+integer outbound_life = 50;
+integer inbound_life = 120;
+integer counter = 0;
+
+float arm_distance = 0.1;
+
+//Object maxspeed and acceleration in m/s and m/s^2 respectively
+float speed = 30;
+float accel = 3;
+
+//This is the max distance, in meters, that the disc should take before returning
+float max_distance = 100;
+float rebound_distance = 20;
+
+//The closer the LOS is to 1, the sharper it will turn
+//Too sharp turns creates zig-zag behaviour
+float LOS_outbound = 1.4;
+
+//Variables to be used for disc combat configuration including damage, disc state, and FX.
+//These become a special string to be parsed into a list during flight.
+integer damage;
+string discstate;
+string discfx;
+string discsep = "d_sep"; //Seperator for dumping to list. Used in comm with launcher.
+list discspace = [""]; //Spacer for dumping to list. Used in comm with launcher.
+list desc; //Used for setting disc's description.
+string strdesc; //Thisis what description becomes when converted to string.
+integer disccontrol; //This is the integer for the disc recall, may not be neccessary.
+integer enemyblock; //This is the integer for the enemy block routines, may not be neccessary.
+integer disckill; //This is to kill the disc if it's stuck and not blocked.
+integer enemydeflect; // This is for when an enemy deflects your disc. They can control it then.
+integer chatchan = -1764; //D²'s primary communication channel.
+key enemyav;
+vector eavpos;
+integer mbitmask;
+
+move_to_target (vector target)
+{
+    
+    //Antigravity force
+    vector antigravity = <0,0,9.8>;
+    
+    //Desired direction and distance
+    vector path_to_target = target - llGetPos();
+    float distance = llVecMag(path_to_target);
+    
+    //Disc desired vector
+    vector desired_vector = speed * llVecNorm(path_to_target);
+    
+    //Adjust desired vector when close to ensure that disc does not overshoot
+    if ( distance < accel )
+    {
+           desired_vector = 2 * path_to_target;
+    }
+    
+    //Actual Vector
+    vector current_vector = llGetVel();
+    
+    //Corrective force is direction of desired - current, times accel
+    vector engine_force = accel * (desired_vector - current_vector);
+    
+    //Add forces together, multiply by mass, and we're good to go
+    vector final_force = engine_force + antigravity;
+    llSetForce( llGetMass() * final_force , FALSE );
+}
+
+try_arming ()
+{
+     list params = llGetObjectDetails(llGetOwner(),[OBJECT_POS]);
+    //disc will not arm unless it is at least arm_distance away
+    if (llVecMag(llGetPos() - llList2Vector(params,0)) > arm_distance) {
+        state inbound;   
+    }
+}
+
+//This Function will return 1 for an Agent, 2, for a Block Shield, and 0 for everything else.
+
+integer whathitme(integer detectedtype, string detectedname)
+{
+    integer colnum;
+    integer value = 0;
+    if(detectedtype & AGENT)
+    {
+        value = 1;
+        return value;
+    }
+    if(detectedname == "blockshield")
+    {
+        value = 2;
+        return value;
+    }
+    return value;
+}
+
+
+//To Rez the Bumper.
+string getiddname()
+{
+    integer stuff = 0;
+    string thisone;
+    integer items = 0;
+    for(stuff = 0; stuff != 1; items++)
+    {
+        thisone = llGetInventoryName(6, items);
+        if(llGetSubString(thisone, 0, 2) == "IDD")
+        {
+            return thisone;
+            stuff = 1;
+        }
+        if(thisone == "")
+        {
+        stuff = 1;
+        }
+    }
+    llOwnerSay("ERROR: Could not find IDD Bumper. Contact Jera Saphir.");
+    return thisone;
+}
+
+rez_collision_target(key target)
+{
+    list agent_info = llGetObjectDetails(target,[OBJECT_POS]);
+    llRezObject(getiddname(),llList2Vector(agent_info,0),<0,0,0>,<0,0,0,0>,25);
+}
+
+list byteunpackerx2()
+{
+    integer byte1 = mbitmask >> 8;
+    integer byte2 = 255 & mbitmask;
+    list output = [byte1, byte2];
+    return output;
+}
+
+vector factioncolor()
+{
+    integer mycolor = llList2Integer(byteunpackerx2(), 0);
+    integer indexval = llListFindList(fac2color, [mycolor])+1;
+    vector output = llList2Vector(fac2color, indexval);
+    return output;
+}
+
+integer damagecheck()
+{
+    return llList2Integer(byteunpackerx2(), 1);
+}
+
+
+
+list fac2color =
+[
+1, <0,1,1>, // User Application
+2, <1, 1,0>, // System Process
+3, <0,1,0>, // Viral
+4, <1,0,0> // Intrusion Countermeasure Protocol/Program
+
+];
+
+
+default
+{
+    state_entry()
+    {
+        llSetColor(<1,1,1>, ALL_SIDES);
+        llSetStatus(STATUS_ROTATE_X | STATUS_ROTATE_Y | STATUS_ROTATE_Z, FALSE);
+    }
+    on_rez(integer start_param)
+    {
+        if(0 == start_param)
+        {
+        llSay(0, "Idling");
+        }
+        else
+        {
+            mbitmask = start_param;
+            llSetColor(factioncolor(), ALL_SIDES);
+            llVolumeDetect(TRUE);
+            damage = damagecheck();
+            state inbound;
+        }
+    }
+}
+ 
+
+state inbound 
+{
+    state_entry()
+    {
+        disccontrol = llListen(chatchan, "", NULL_KEY, "recall");
+        counter = 0;
+        discstate = "inbound";
+        desc = [damage, discstate, discfx];
+        strdesc = llDumpList2String(desc, discsep);
+        llSetObjectDesc(strdesc);
+        llSetTimerEvent(0.1);
+    }
+    listen(integer channel, string name, key id, string message)
+    {
+        if(message == "recall" && llList2Key(llGetObjectDetails(id, [OBJECT_OWNER]), 0) == llGetOwner())
+        {
+            float factor = 30; // Factor for kickback if stuck in a wall.
+            float oldaccel = accel;
+            accel = factor;
+            list params = llGetObjectDetails(llGetOwner(),[OBJECT_POS]);
+            move_to_target(llList2Vector(params,0));
+            accel = oldaccel;
+            state inbound;
+        }
+    }
+    
+    collision_start(integer num_detected)
+    {
+        integer thingihit = 0;
+        thingihit = whathitme(llDetectedType(0), llDetectedName(0));
+        if (thingihit == 1)
+        {
+            enemyav = llDetectedKey(0);
+            rez_collision_target(enemyav);
+        }
+        if (llDetectedKey(0) == llGetOwner())
+        {
+            llDie();
+        }
+    }
+    
+    timer()
+    {
+        list params = llGetObjectDetails(llGetOwner(),[OBJECT_POS]);
+        move_to_target(llList2Vector(params,0));
+        counter = counter + 1;
+    }
+}
+
