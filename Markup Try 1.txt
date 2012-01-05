@@ -1,0 +1,7 @@
+﻿D2 was a tron like disc game I made in Second Life.
+This was the first coding project I ever attempted. I had no prior coding experience before it.
+The LSL language is very limited, there were many challenges and limitations on the script language to prevent abuse that I had to hack around.
+The game consisted of four game objects, which communicated much like independant computers. Networking them was a challenge, as each had to know what the other's state was at all times to make a decision on what to do next.
+Performance was important for the flight scripts. The scripts had to run very fast, SL limited resources for user generated scripts. This meant they had to do as few operations as possible, and account for player input during each moment of flight gametime.
+This was a much bigger project than I imagined. I completed it in Winter of 2010. In the time I spent on it, I not only learned the basics of coding, I learned new math, and I found completing the project quite satisfying. While working on it, other LSL scripters assured me what I was doing was quite impossible, given SL's limitations.
+But I was certain I had seen it could be done. I wasn't daunted when functions were misdocumented, and I had to come up with new solutions. And when it was done, many who said I couldn't do it, were the first to purchase the game when I released it.
