@@ -1,0 +1,9 @@
+﻿Question 2:
+
+I have always had an interest in logic. From Star Trek's Vulcans as a kid and Frank Herbert's Mentats from "Dune" to computer science in the current, I am quite infatuated with logic. But I realized I knew little about formal logic. Having had little training in it myself in my childhood, I decided to change that. I went to Amazon.com, pulled up some books on Logic, and the highest rated and competitively priced book was Deductive Logic by St. George William Joseph Stock. It was free. I downloaded it, expecting it to be way above my head. Heavy reading, big maths.
+
+I was so delighted as I found it was quite the opposite. It was elegant. It was simple. The phrases were technical, but Russel walks you through each one. The language is precise yet simple. The concepts are easy to consume, they make sense.
+
+It also taught me that deductive logic was merely one form of logic, and hardly up to the task of getting by in life claiming a love of logic with this book alone. I've moved on to "Mysticism, Logic, and Other Essays" by Bertrand Russel and "Logic - Deductive and Inductive" by Carveth Read.
+
+To best encapsulate how the book actually influenced me would be to put it like this; It was extremely validating. It helped me refine my method. I plan on continuing my studies in formal logic.
